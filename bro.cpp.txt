@@ -1,0 +1,390 @@
+#include "header.h" 
+
+#define LISTEN_QUEUE_SIZE 10
+#define THREAD_NUMBER 3
+
+struct message {
+	char puborsub[10];
+	char topic[20];
+	char mbuf[BUFFER_SIZE];
+}messagetopic;
+
+struct subsrcibe{
+	char sub_Topic[20];
+	char sbuf[BUFFER_SIZE];
+	
+}subscriber;
+
+struct publish{
+	char pub_Topic[20];
+	char pbuf[BUFFER_SIZE];
+	
+}publisher[3];
+
+int k=0;
+
+pthread_mutex_t mutex_pub=PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutex_sub=PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutex_sub2=PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutex_sub_final=PTHREAD_MUTEX_INITIALIZER;
+
+pthread_cond_t thread_cond_pub= PTHREAD_COND_INITIALIZER;
+pthread_cond_t thread_cond_subFirst= PTHREAD_COND_INITIALIZER;
+pthread_cond_t thread_cond_subGet= PTHREAD_COND_INITIALIZER;
+
+void mutexDestroy(){ 
+	pthread_mutex_destroy(&mutex_pub);
+	pthread_mutex_destroy(&mutex_sub);
+	pthread_mutex_destroy(&mutex_sub2);
+	pthread_cond_destroy(&thread_cond_pub);
+	pthread_cond_destroy(&thread_cond_subFirst); 
+	pthread_cond_destroy(&thread_cond_subGet); 
+}
+//뮤텍스와 컨디션 셋을 2개 선언하므로써 , pub과 sub을 둘다 제어한다.
+struct queue1{
+	int queue[3]; 
+	int rear;
+	int front;
+	int subcount;
+}subQueue;
+
+struct queue2{
+	int queue[3]; 
+	int rear;
+	int front;
+	int pubcount;
+}pubQueue;
+
+void initializeQueue()
+{ 
+	subQueue.front = 0;
+	subQueue.rear = 0;
+	subQueue.subcount=0;
+	pubQueue.front = 0;
+	pubQueue.rear = 0; 
+	pubQueue.pubcount = 0;
+}
+/*
+void push(int push_value) //디스크립터를 push한다.
+{
+	if((sharedQueue.rear+1)%THREAD_NUMBER ==sharedQueue.front)
+		printf("Queue가 꽉찼습니다.\n");
+	else{//값을 넣는다.
+		printf("push_value first %d \n",push_value);
+		sharedQueue.queue[sharedQueue.rear]=push_value;
+		printf("shard %d \n",sharedQueue.queue[sharedQueue.rear]);
+		sharedQueue.rear=(sharedQueue.rear+1)%THREAD_NUMBER;
+		printf("shard next rear %d \n",sharedQueue.rear);
+		printf("next rear val push value %d \n", sharedQueue.queue[sharedQueue.rear]);
+	}
+}*/
+
+
+/*
+int pop()
+{
+	if(sharedQueue.front==sharedQueue.rear)//큐 비어있는지 확인.
+		return 0;
+	else{
+		int temp=sharedQueue.queue[sharedQueue.front];//front가 가리키는 현재값 저장.
+		sharedQueue.front=(sharedQueue.front+1)%THREAD_NUMBER; //front 증가.
+		return temp; //front 증가시키고 , 현재 있는 부분 리턴.
+	}
+}*/
+/*
+int IsFull() //큐 full 인지 확인.
+{
+	if((sharedQueue.rear+1)%THREAD_NUMBER==sharedQueue.front){
+		printf("큐가 가득차 있습니다. \n");
+		return 2;
+	}else{
+		printf("큐가 가득 차 있지 않습니다.\n");
+		return 0;	
+	}	
+}*/
+ 
+void *pub_method(void *argument) 
+{ 
+	printf("in pub_method, thread put in this space..\n"); 
+	int connectFD = pubQueue.queue[pubQueue.front];; 
+	int readBytes, writtenBytes; 
+	char T_overlap[100]="이미 중복된 토픽입니다.다른토픽을 입력하세요.";
+	int overlap=0;//오버랩 체크 플래그
+	int overflag=0;
+	int save_array=0;
+	
+	 while (true) 
+	 { //프로듀서가 제공한 connect FD를 이용해 클라이언트와 통신하시오.
+		//lock에서 3개의 스레드가 멈춰있다. 하나씩 입장할수 있다.
+		pthread_mutex_lock(&mutex_pub); 
+		printf("mutex _lock _critical section 입장 \n");
+		pthread_cond_wait(&thread_cond_pub,&mutex_pub); //signal이들어오면 깨어난다.
+		printf("cond_wait 빠져나옴 \n");
+		pthread_mutex_unlock(&mutex_pub);
+		printf("pub_method가 깨어났습니다.(main시그날신호받음)\n");
+
+		//메인에서 첫 받은 연결 중복체크->중복이 아니라면, 배열에 추가, 중복이라면, 종료.
+
+		//반복문 안으로들어감. 
+		while(true)
+		{
+			//데이터를 읽어들인다.
+			readBytes=read(connectFD, (struct message*)&messagetopic, sizeof(messagetopic));
+			if (readBytes < 0) {
+				printf("Read error");
+				return NULL;
+			} else if (readBytes == 0) {
+				printf("Connection closed");
+				return NULL;
+			}
+			
+			printf("Read\n");
+			connectFD=pubQueue.queue[pubQueue.front];	//pop;
+			pubQueue.front++;
+			if(pubQueue.front==4)
+				pubQueue.front=0;
+			pubQueue.pubcount--;
+			//메인스레드가 받은 소켓을 받는다.		
+
+			for(int i=0;i<3;i++)
+			{
+				//만약 같은 토픽이 존재한다면, 이미 있는 토픽임을 알려준다.
+				if(strcmp(publisher[i].pub_Topic, messagetopic.topic)==0 && overflag ==0) 
+				{
+				/* 2. 각 노드는 broker에게 자신이 발행 또는 구독할 topic을 등록한다. (3점)     
+				Publisher의 경우 이미 다른 publisher가 등록한 topic을 또 등록할 수 없다.*/
+					printf("중복 토픽발생. \n");
+					write(connectFD,T_overlap, sizeof(T_overlap));
+					close(connectFD);
+					overlap=1; //오버랩 플래그를 설정한다.
+					//연결을 종료시킨다.
+					break; //빠져나간다.
+				}			
+			}
+
+			overflag=1;//중복검사완료.이것을 통해서 중복검사를 한번했다면, 다시는 하지 않게 된다.
+
+			if(overlap==0)//중복되는것이 없던경우이다.
+			{ //받은모델링 변수들을 배열로 저장.		
+				printf("중복토픽이 없으므로, 토픽&메시지를 추가합니다.\n");
+				for(int j=0;j<3;j++)
+				{
+							
+					if(strcmp(publisher[j].pub_Topic,"NULL")==0 && save_array==0){//비어있는 곳을 찾으면,	
+						save_array=1;//초기배열 저장 성공. 이제 못들어오게 막음.
+						printf("빈 publisher 발견. 저장 \n");
+						sprintf(publisher[j].pub_Topic,"%s",messagetopic.topic);
+						sprintf(publisher[j].pbuf,"%s",messagetopic.mbuf);			
+
+						pthread_cond_broadcast(&thread_cond_subGet);//sub아 일어나서 데이터가져가렴.
+						printf("데이터 in. subscribe의 cond_subget을 깨웁니다 \n");
+
+			
+						while(true){
+							readBytes=read(connectFD,(struct message*)&messagetopic,sizeof(messagetopic));//데이터를 읽어들인다.
+								
+							if(readBytes==0)
+							{	
+								close(connectFD);
+								printf("connectFD %d 종료!\n",connectFD);
+							}else{
+								sprintf(publisher[j].pub_Topic,"%s",messagetopic.topic);
+								sprintf(publisher[j].pbuf,"%s",messagetopic.mbuf);
+								printf("값 체크해보기. 들어온 값 %s \n",messagetopic.mbuf);
+								pthread_cond_broadcast(&thread_cond_subGet);//sub아 일어나서 데이터가져가렴.
+								printf("thread_cond_subGet을 깨웁니다 \n");
+							}
+							}//while문.
+						}//if-end
+					}//for-end		
+				}//overlap닫힘		
+			}
+		 }
+	 return NULL;
+}
+
+
+void *sub_method(void *argument) //아규먼트로 디스크립터 값을 받는다.
+{ 
+
+	//sub을 깨웠다. 1.등록하는 경우. 2.메세지가 발생하여 읽어가야할 경우.
+	printf("in submethod,thread put in this space..\n"); 
+	
+	int connectFD; 
+	int readBytes, writtenBytes; 
+
+	while (true) 
+	{ //프로듀서가 제공한 connect FD를 이용해 클라이언트와 통신하시오.
+
+		pthread_mutex_lock(&mutex_sub);
+		printf("sub 대기 갯수 : %d \n",k);
+		
+		pthread_cond_wait(&thread_cond_subFirst,&mutex_sub); //새로운 sub 일경우	
+		printf("subFirst로 다음 sub 출격 합니다 여기주목!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+		
+		connectFD=subQueue.queue[subQueue.front];	//pop;
+			subQueue.front++;
+			if(subQueue.front==4)
+				subQueue.front=0;
+			subQueue.subcount--;
+		//connectFD =pop();//파일디스크립터를 받아감.3명의 sub의 디스크립터 값이 모두다르다.
+		sprintf(subscriber.sub_Topic,"%s",messagetopic.topic);
+
+		printf("sub %d번째의 connectFD Value : %d \n",k++,connectFD);
+		printf("전달받은 subscriber.sub_Topic : %s \n",subscriber.sub_Topic);
+		pthread_mutex_unlock(&mutex_sub);
+
+		printf("sub의 connectFD : %d \n",connectFD);
+
+		
+		while(true)
+		{//데이터 변동이 일어났을 경우.	
+			//해당 플래그는, 메세지가 발생하였는가 안하였는가 판단하는 지표이다.
+
+			printf("sub : subget signal 발생! \n");
+			//토픽을 확인한다.
+
+			pthread_mutex_lock(&mutex_sub_final);
+			//while(pubQueue.pubcount==0){	//while(empty) wait
+				pthread_cond_wait(&thread_cond_subGet,&mutex_sub_final);
+			//}
+			//pthread_cond_wait(&thread_cond_subGet,&mutex_sub_final); //boradcast로 모든 스레드를 깨운다.
+
+			printf("sub your connectFD : %d \n",connectFD);
+			 		
+			for(int j=0; j<3; j++)
+			{
+				printf("compere topic!!!!!\n");
+				if(strcmp(publisher[j].pub_Topic, subscriber.sub_Topic)==0 && strcmp(publisher[j].pbuf, "NULL")!=0)//두 토픽이 같고, 메세지가 Null이 아닐 경우.
+				{ /*	4번  
+	
+					- 새로운 subscriber가 도중에 접속하면 해당 subscriber가 받고자 하는 topic의 메시지 를 전달한다.
+					- Publisher가 메시지를 생산하지 않아 topic에 메시지가 없는 경우에는 전달하지 않는 다. NULL조건문으로 구현.*/			
+					
+					printf("sub과 같은 topic의 pub발견 ! \n");					
+					printf("sub에게 전송될 topic : %s \n",subscriber.sub_Topic);
+
+					sprintf(subscriber.sbuf,"%s",publisher[j].pbuf);
+					printf("sub에게 전송될 but : %s \n",subscriber.sbuf);
+
+					write(connectFD,(struct sub_save*)&subscriber,sizeof(subscriber));//구독자에게 전달한다.
+					//구독자에게 전달후, 해당 메시지는 null값으로 바꾼다.
+					sprintf(publisher[j].pbuf,"%s","NULL");
+				}
+			}
+			pthread_mutex_unlock(&mutex_sub_final);
+		}		
+	}	
+	return NULL;
+}
+
+
+ int main() 
+ { 
+	struct sockaddr_in listenSocket; 
+	memset(&listenSocket, 0, sizeof(listenSocket)); 
+	listenSocket.sin_family = AF_INET;
+	listenSocket.sin_addr.s_addr = htonl(INADDR_ANY);
+	listenSocket.sin_port = htons(PORT);
+
+	int listenFD = socket(AF_INET, SOCK_STREAM, 0);
+	if (bind(listenFD, (struct sockaddr *) &listenSocket, sizeof(listenSocket)) == -1) {
+		printf("Can not bind.\n");
+ 	 	fflush(stdout);
+
+		close(listenFD); 
+		mutexDestroy();
+		return -1;
+ 	}
+
+	if (listen(listenFD, LISTEN_QUEUE_SIZE) == -1){ 
+		printf("Listen fail.\n"); 
+		fflush(stdout);
+		close(listenFD); 
+		mutexDestroy();
+		return -1;
+	}
+
+	printf("Waiting for clients…\n"); 
+	fflush(stdout);
+
+	struct sockaddr_in connectSocket; 
+	socklen_t connectSocketLength = sizeof(connectSocket); 
+	int connectFD;
+	initializeQueue();
+	pthread_t pub[3] = {0}; 
+	pthread_t sub[3] = {0}; 
+	for (int threadNumber = 0; threadNumber < THREAD_NUMBER; threadNumber++) 
+	{ 
+		//1.최대 3개의 publisher와 3개의 subscriber가 broker에 접속할 수 있다. (2점) 
+		int publisher thread; 
+		int subscriber thread;
+		//create thread
+		publisher thread = pthread_create(&pub[threadNumber], NULL, pub_method, NULL); 
+		subscriber thread = pthread_create(&sub[threadNumber], NULL, sub_method, NULL);
+
+		printf("thread create!%d\n",threadNumber);
+
+		if (publisher thread != 0) {
+			 printf("Thread create error\n"); 
+			 fflush(stdout);
+			 break;
+		}
+
+		if (subscriber thread != 0){
+			printf("Thread create error\n"); 
+			fflush(stdout);
+			break;
+		}
+	 }
+
+	while (true){ 	
+	 	printf("main thread accept eating…\n");
+		connectFD = accept(listenFD, (struct sockaddr*)&connectSocket, &connectSocketLength); 
+		//여기서 리드를 먼저 한번 해준다면?.
+		//int check=IsFull();	//queue is full?
+		printf("accept 빠져나옴 . queue가 FULL인지 아닌지 알아봄. \n");
+		
+		if((subQueue.rear+1)%3==subQueue.front){
+			printf("subQueue is full");
+		}else if((pubQueue.rear+1)%3==pubQueue.front){
+			printf("pubQueue is full");
+		}else {
+			int readcount=0;
+			
+			//push(connectFD);
+			readcount=read(connectFD,(struct message*)&messagetopic,sizeof(message topic));
+			//데이터를 처음에 읽어온다.
+
+			if(readcount==0){
+				close(connectFD);
+				printf("connectFD : %d 의 연결이 끊어졌습니다. \n",connectFD);
+			}
+			else if(strcmp(messagetopic.puborsub,"pub")==0){//wake up publisher
+				pthread_cond_signal(&thread_cond_pub);	
+				pubQueue.queue[pubQueue.rear]=connectFD;
+				//printf("publisher woke up\n");
+				//printf("shard %d \n",sharedQueue.queue[sharedQueue.rear]);
+				pubQueue.pubcount++;
+				if(pubQueue.rear==4)
+					pubQueue.rear=0;
+			}else if(strcmp(messagetopic.puborsub,"sub")==0){//wake up subscriber	
+				pthread_cond_signal(&thread_cond_subFirst);
+				subQueue.queue[subQueue.rear]=connectFD;
+				//printf("shard %d \n",subQueue.queue[sharedQueue.rear]);
+				subQueue.subcount++;
+				if(subQueue.rear==4)
+					subQueue.rear=0;
+				//printf("sub하나가 추가되었습니다. 현재 subscribe id : %d \n",subcount++);		
+			}		
+		}
+		//추가.
+		//메인 쓰레드의 역할은 "LISTEN ->accept -> push" 해주는 
+	}
+	for (int i = 0; i < THREAD_NUMBER; i++){ 
+		pthread_join(sub[i], NULL); 
+		pthread_join(pub[i], NULL);
+	}
+	close(listenFD); 
+	mutexDestroy();
+}

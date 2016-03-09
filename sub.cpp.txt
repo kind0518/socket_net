@@ -1,0 +1,73 @@
+#include "header.h" 
+
+struct message{
+	char is_pub_sub[10]; //deside if publisher or subscriber
+	char Get_Topic[20]; //pub&sub에서 올 Topic 이름 저장구조체이다.
+	char mbuf[BUFFER_SIZE]; //message 저장할 버퍼이다.
+}sendtopic;
+
+struct sub_save{
+	char sub_Topic[20];
+	char sbuf[BUFFER_SIZE];
+}submessage;
+
+int main(int argc, char** argv)
+{ 
+	if (argc != 1) { 
+		printf("Usage: %s IPv4-address\n", argv[0]); 
+		return -1; 
+	}
+	struct message sendtopic={"NULL"}; //input의 구조체.
+	struct sub_save submessage={"NULL","NULL"};
+
+	struct sockaddr_in connectSocket; 
+	memset(&connectSocket, 0, sizeof(connectSocket));
+	connectSocket.sin_family = AF_INET; 
+	connectSocket.sin_addr.s_addr=inet_addr("127.00.00.1");
+	connectSocket.sin_port = htons(PORT);
+
+	int connectFD = socket(AF_INET, SOCK_STREAM, 0);
+
+	if (connect(connectFD, (struct sockaddr*) &connectSocket, sizeof(connectSocket)) == -1){
+	 		 printf("Can not connect.\n"); 
+			 return -1; 
+	}
+	char temp1[20];
+	char temp2[100];
+	int readBytes=0;
+	
+	while (true) 
+	{ 
+		sprintf(sendtopic.is_pub_sub,"%s","sub");
+		//pub_sub종류에 sub을 입력한다.
+				
+		printf("구독신청할 Topic명을 입력하세요:\n "); 
+		fflush(stdout);
+		
+		scanf("%s",temp1);
+
+		sprintf(sendtopic.Get_Topic,"%s",temp1);
+
+		printf("전송될 Topic %s\n",sendtopic.Get_Topic);		
+		
+		sprintf(sendtopic.mbuf,"%s","Sub 구독신청\n");		
+		if(write(connectFD, (struct message*)&sendtopic,sizeof(send topic))<0){
+			printf("write error\n");
+			exit(1);
+		}//브로커에 등록
+
+		//브로커 등록 후 대기.
+		while(1){
+			
+			if(readBytes=read(connectFD,(struct sub_save*)&submessage,sizeof(sub message))==0){
+				printf("Connection closed \n");
+				return 0;
+			}
+			else{
+				printf("구독정보가 도착했습니다 ! \n [TOPIC] : %s \n [MESSAGE] : %s \n", submessage.sub_Topic, submessage.sbuf);
+			}
+		}
+	}
+	close(connectFD); 
+	return 0;
+}
